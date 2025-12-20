@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ========================================
-# Cursor macOS 机器码修改脚本 (增强权限修复版)
+# Cursor macOS 机器码修改脚本
 # ========================================
 #
 # 🔧 权限修复增强：
@@ -445,6 +445,10 @@ except Exception as e:
     local UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
     local MACHINE_ID="auth0|user_$(openssl rand -hex 32)"
     local SQM_ID="{$(uuidgen | tr '[:lower:]' '[:upper:]')}"
+    # 🔧 新增: serviceMachineId (用于 storage.serviceMachineId)
+    local SERVICE_MACHINE_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    # 🔧 新增: firstSessionDate (重置首次会话日期)
+    local FIRST_SESSION_DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
     log_info "✅ [进度] 1/5 - 设备标识符生成完成"
 
@@ -492,11 +496,14 @@ try:
         config = json.load(f)
 
     # 安全更新配置，确保属性存在
+    # 🔧 修复: 添加 storage.serviceMachineId 和 telemetry.firstSessionDate
     properties_to_update = {
         'telemetry.machineId': '$MACHINE_ID',
         'telemetry.macMachineId': '$MAC_MACHINE_ID',
         'telemetry.devDeviceId': '$UUID',
-        'telemetry.sqmId': '$SQM_ID'
+        'telemetry.sqmId': '$SQM_ID',
+        'storage.serviceMachineId': '$SERVICE_MACHINE_ID',
+        'telemetry.firstSessionDate': '$FIRST_SESSION_DATE'
     }
 
     for key, value in properties_to_update.items():
@@ -549,11 +556,14 @@ try:
     with open('$config_path', 'r', encoding='utf-8') as f:
         config = json.load(f)
 
+    # 🔧 修复: 添加 storage.serviceMachineId 和 telemetry.firstSessionDate 验证
     properties_to_check = {
         'telemetry.machineId': '$MACHINE_ID',
         'telemetry.macMachineId': '$MAC_MACHINE_ID',
         'telemetry.devDeviceId': '$UUID',
-        'telemetry.sqmId': '$SQM_ID'
+        'telemetry.sqmId': '$SQM_ID',
+        'storage.serviceMachineId': '$SERVICE_MACHINE_ID',
+        'telemetry.firstSessionDate': '$FIRST_SESSION_DATE'
     }
 
     verification_passed = True
@@ -594,8 +604,52 @@ except Exception as e:
             echo "   🔹 macMachineId: $MAC_MACHINE_ID"
             echo "   🔹 devDeviceId: $UUID"
             echo "   🔹 sqmId: $SQM_ID"
+            echo "   🔹 serviceMachineId: $SERVICE_MACHINE_ID"
+            echo "   🔹 firstSessionDate: $FIRST_SESSION_DATE"
             echo
             log_info "💾 [备份] 原配置已备份至: $backup_name"
+
+            # 🔧 新增: 修改 machineid 文件
+            log_info "🔧 [machineid] 正在修改 machineid 文件..."
+            local machineid_file_path="$HOME/Library/Application Support/Cursor/machineid"
+            if [ -f "$machineid_file_path" ]; then
+                # 备份原始 machineid 文件
+                local machineid_backup="$backup_dir/machineid.backup_$(date +%Y%m%d_%H%M%S)"
+                cp "$machineid_file_path" "$machineid_backup" 2>/dev/null && \
+                    log_info "💾 [备份] machineid 文件已备份: $machineid_backup"
+            fi
+            # 写入新的 serviceMachineId 到 machineid 文件
+            if echo -n "$SERVICE_MACHINE_ID" > "$machineid_file_path" 2>/dev/null; then
+                log_info "✅ [machineid] machineid 文件修改成功: $SERVICE_MACHINE_ID"
+                # 设置 machineid 文件为只读
+                chmod 444 "$machineid_file_path" 2>/dev/null && \
+                    log_info "🔒 [保护] machineid 文件已设置为只读"
+            else
+                log_warn "⚠️  [machineid] machineid 文件修改失败"
+                log_info "💡 [提示] 可手动修改文件: $machineid_file_path"
+            fi
+
+            # 🔧 新增: 修改 .updaterId 文件（更新器设备标识符）
+            log_info "🔧 [updaterId] 正在修改 .updaterId 文件..."
+            local updater_id_file_path="$HOME/Library/Application Support/Cursor/.updaterId"
+            if [ -f "$updater_id_file_path" ]; then
+                # 备份原始 .updaterId 文件
+                local updater_id_backup="$backup_dir/.updaterId.backup_$(date +%Y%m%d_%H%M%S)"
+                cp "$updater_id_file_path" "$updater_id_backup" 2>/dev/null && \
+                    log_info "💾 [备份] .updaterId 文件已备份: $updater_id_backup"
+            fi
+            # 生成新的 updaterId（UUID格式）
+            local new_updater_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            if echo -n "$new_updater_id" > "$updater_id_file_path" 2>/dev/null; then
+                log_info "✅ [updaterId] .updaterId 文件修改成功: $new_updater_id"
+                # 设置 .updaterId 文件为只读
+                chmod 444 "$updater_id_file_path" 2>/dev/null && \
+                    log_info "🔒 [保护] .updaterId 文件已设置为只读"
+            else
+                log_warn "⚠️  [updaterId] .updaterId 文件修改失败"
+                log_info "💡 [提示] 可手动修改文件: $updater_id_file_path"
+            fi
+
             return 0
         else
             log_error "❌ [错误] 修改验证失败"
@@ -1442,6 +1496,8 @@ modify_cursor_js_files() {
     local sqm_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
     # 生成一个固定的session_id用于替换someValue.sessionId
     local session_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    # 🔧 新增: 生成 firstSessionDate 用于替换 someValue.firstSessionDate
+    local first_session_date=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
     log_info "🔑 [生成] 已生成新的设备标识符"
     log_info "   machineId: ${machine_id:0:16}..."
@@ -1554,10 +1610,17 @@ modify_cursor_js_files() {
             replaced=true
         fi
 
+        # 🔧 新增: 替换 someValue.firstSessionDate（首次会话日期）
+        if grep -q 'someValue\.firstSessionDate' "$file"; then
+            sed -i.tmp "s/someValue\.firstSessionDate/${first_session_date}/g" "$file"
+            log_info "   ✓ [方案A] 替换 someValue.firstSessionDate"
+            replaced=true
+        fi
+
         # ========== 方法B: IIFE运行时劫持（crypto.randomUUID） ==========
-        # 使用IIFE包装，兼容webpack打包的bundle文件，无需import语法
-        # 劫持crypto.randomUUID从源头拦截所有UUID生成
-        local inject_code=";(function(){/*__cursor_patched__*/var _cr=require('crypto'),_orig=_cr.randomUUID;_cr.randomUUID=function(){return'${new_uuid}';};if(typeof globalThis!=='undefined'){globalThis.__cursor_machine_id='${machine_id}';globalThis.__cursor_mac_machine_id='${mac_machine_id}';globalThis.__cursor_dev_device_id='${device_id}';globalThis.__cursor_sqm_id='${sqm_id}';}try{var _os=require('os'),_origNI=_os.networkInterfaces;_os.networkInterfaces=function(){var r=_origNI.call(_os);for(var k in r){if(r[k]){for(var i=0;i<r[k].length;i++){if(r[k][i].mac){r[k][i].mac='00:00:00:00:00:00';}}}}return r;};}catch(e){}console.log('[Cursor ID Modifier] 设备标识符已劫持 - 煎饼果子(86) 公众号【煎饼果子卷AI】');})();"
+        # 使用IIFE包装，兼容webpack打包的bundle文件
+        # 在支持 require 的环境中劫持 crypto.randomUUID；在 ESM 环境中安全降级为 no-op，避免 require 抛错
+        local inject_code=";(function(){/*__cursor_patched__*/var _cr=null,_os=null;if(typeof require!=='undefined'){try{_cr=require('crypto');_os=require('os');}catch(e){}}if(_cr&&_cr.randomUUID){var _orig=_cr.randomUUID;_cr.randomUUID=function(){return'${new_uuid}';};}if(typeof globalThis!=='undefined'){globalThis.__cursor_machine_id='${machine_id}';globalThis.__cursor_mac_machine_id='${mac_machine_id}';globalThis.__cursor_dev_device_id='${device_id}';globalThis.__cursor_sqm_id='${sqm_id}';}if(_os&&_os.networkInterfaces){try{var _origNI=_os.networkInterfaces;_os.networkInterfaces=function(){var r=_origNI.call(_os);for(var k in r){if(r[k]){for(var i=0;i<r[k].length;i++){if(r[k][i].mac){r[k][i].mac='00:00:00:00:00:00';}}}}return r;};}catch(e){}}console.log('[Cursor ID Modifier] 设备标识符已劫持 - 煎饼果子(86) 公众号【煎饼果子卷AI】');})();"
 
         # 注入代码到文件开头
         echo "$inject_code" > "${file}.new"
@@ -1587,203 +1650,6 @@ modify_cursor_js_files() {
     else
         log_error "❌ [失败] 没有成功修改任何文件"
         return 1
-    fi
-}
-
-# 增强的系统MAC地址修改函数，支持多种兼容性检测和修改方法
-change_system_mac_address() {
-    log_info "开始尝试修改所有活动的 Wi-Fi/Ethernet 接口的系统 MAC 地址..."
-    echo
-
-    # 环境兼容性预检查
-    detect_macos_environment
-    local env_compatible=$?
-
-    if [[ $env_compatible -ne 0 ]]; then
-        echo -e "${YELLOW}⚠️  [兼容性警告]${NC} 检测到可能存在MAC地址修改限制的环境:"
-        echo -e "${YELLOW}   • macOS版本: $MACOS_VERSION${NC}"
-        echo -e "${YELLOW}   • 硬件类型: $HARDWARE_TYPE${NC}"
-        echo -e "${YELLOW}   • SIP状态: $SIP_STATUS${NC}"
-        echo
-        echo -e "${BLUE}💡 [建议]${NC} 在此环境中，传统的ifconfig方法可能失败。"
-        echo -e "${BLUE}   脚本将自动尝试多种兼容性方法，包括第三方工具。${NC}"
-        echo
-
-        # 检查第三方工具可用性
-        local tools_available=false
-        if command -v spoof-mac >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ 检测到 spoof-mac 工具${NC}"
-            tools_available=true
-        fi
-        if command -v macchanger >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ 检测到 macchanger 工具${NC}"
-            tools_available=true
-        fi
-
-        if [[ $tools_available == false ]]; then
-            echo -e "${YELLOW}⚠️  未检测到第三方MAC修改工具${NC}"
-            echo -e "${BLUE}💡 建议安装: brew install spoof-mac 或 brew install macchanger${NC}"
-            echo
-
-            # 🔧 Apple Silicon智能替代方案
-            if [[ "$HARDWARE_TYPE" == "Apple Silicon" ]]; then
-                echo -e "${BLUE}🔧 [智能方案]${NC} 检测到Apple Silicon环境，MAC地址修改受硬件限制"
-                echo -e "${BLUE}💡 [自动切换]${NC} 将自动使用JS内核修改实现更直接的设备识别绕过"
-                echo
-
-                log_info "🔄 [智能切换] 自动切换到JS内核修改方案..."
-                if modify_cursor_js_files; then
-                    log_info "✅ [成功] JS内核修改完成，已实现设备识别绕过"
-                    log_info "💡 [说明] 此方案比MAC地址修改更直接有效，完美适配Apple Silicon"
-                    return 0
-                else
-                    log_warn "⚠️  [警告] JS内核修改失败，将继续尝试MAC地址修改"
-                fi
-            fi
-
-            # 非Apple Silicon环境或JS修改失败时，询问是否继续MAC地址修改
-            read -p "是否继续尝试MAC地址修改？(y/n): " continue_choice
-            if [[ ! "$continue_choice" =~ ^(y|yes)$ ]]; then
-                log_info "用户选择跳过MAC地址修改"
-                return 1
-            fi
-        fi
-    fi
-
-    echo -e "${YELLOW}[警告]${NC} 即将尝试修改您所有活动的 Wi-Fi 或以太网接口的 MAC 地址。"
-    echo -e "${YELLOW}[警告]${NC} 此更改是 ${RED}临时${NC} 的，将在您重启 Mac 后恢复为原始地址。"
-    echo -e "${YELLOW}[警告]${NC} 修改 MAC 地址可能会导致临时的网络中断或连接问题。"
-    echo -e "${YELLOW}[警告]${NC} 请确保您了解相关风险。此操作主要影响本地网络识别，而非互联网身份。"
-    echo
-
-    local active_interfaces=()
-    local potential_interfaces=()
-    local default_route_interface=""
-
-    # 0. 尝试获取默认路由接口，作为后备
-    log_info "尝试通过路由表获取默认网络接口 (用于后备)..."
-    default_route_interface=$(route get default | grep 'interface:' | awk '{print $2}')
-    if [ -n "$default_route_interface" ]; then
-        log_info "检测到默认路由接口 (后备): $default_route_interface"
-    else
-        log_warn "未能通过路由表获取默认接口 (后备)。"
-    fi
-
-    # 1. 获取所有 Wi-Fi 和 Ethernet 接口名称
-    log_info "正在检测 Wi-Fi 和 Ethernet 接口..."
-    while IFS= read -r line; do
-        if [[ $line == "Hardware Port: Wi-Fi" || $line == "Hardware Port: Ethernet" ]]; then
-            read -r dev_line # 读取下一行 Device: enX
-            device=$(echo "$dev_line" | awk '{print $2}')
-            if [ -n "$device" ]; then
-                log_debug "检测到潜在接口: $device ($line)"
-                potential_interfaces+=("$device")
-            fi
-        fi
-    done < <(networksetup -listallhardwareports)
-
-    if [ ${#potential_interfaces[@]} -eq 0 ]; then
-        log_warn "未能通过 networksetup 检测到任何 Wi-Fi 或 Ethernet 接口。"
-        # 检查是否有路由表接口作为后备
-        if [ -n "$default_route_interface" ]; then
-            log_warn "将使用路由表检测到的接口 '$default_route_interface' 作为后备。"
-            potential_interfaces+=("$default_route_interface")
-        else
-            log_warn "路由表也未能提供后备接口。"
-            # 在此情况下，potential_interfaces 仍为空，后续逻辑会处理
-        fi
-    fi
-
-    # 2. 检查哪些接口是活动的
-    log_info "正在检查接口活动状态..."
-    for interface_name in "${potential_interfaces[@]}"; do
-        log_debug "检查接口 '$interface_name' 状态..."
-        if ifconfig "$interface_name" 2>/dev/null | grep -q "status: active"; then
-            log_info "发现活动接口: $interface_name"
-            active_interfaces+=("$interface_name")
-        else
-            log_debug "接口 '$interface_name' 非活动或不存在。"
-        fi
-    done
-
-    # 3. 检查是否找到活动接口
-    if [ ${#active_interfaces[@]} -eq 0 ]; then
-        log_warn "未找到任何活动的 Wi-Fi 或 Ethernet 接口可供修改 MAC 地址。"
-        echo -e "${YELLOW}未找到活动的 Wi-Fi 或 Ethernet 接口。跳过 MAC 地址修改。${NC}"
-        return 1 # 返回错误码，表示没有接口被修改
-    fi
-
-    log_info "将尝试为以下活动接口修改 MAC 地址: ${active_interfaces[*]}"
-    echo
-
-    # 4. 🚀 循环处理找到的活动接口（增强版）
-    local overall_success=true
-    local successful_interfaces=()
-    local failed_interfaces=()
-
-    echo -e "${BLUE}🚀 [开始] 开始处理 ${#active_interfaces[@]} 个活动接口...${NC}"
-    echo
-
-    # 处理每个接口
-    for i in "${!active_interfaces[@]}"; do
-        local interface_name="${active_interfaces[$i]}"
-        local interface_num=$((i + 1))
-
-        echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${YELLOW}║                处理接口 $interface_num/${#active_interfaces[@]}: $interface_name                ║${NC}"
-        echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}"
-        echo
-
-        if _change_mac_for_one_interface "$interface_name"; then
-            log_info "✅ [成功] 接口 '$interface_name' MAC地址修改成功"
-            successful_interfaces+=("$interface_name")
-        else
-            log_warn "⚠️  [失败] 接口 '$interface_name' MAC地址修改失败"
-            failed_interfaces+=("$interface_name")
-            overall_success=false
-        fi
-
-        echo
-        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo
-    done
-
-    # 📊 显示处理结果统计
-    echo -e "${BLUE}📊 [统计] MAC地址修改结果统计:${NC}"
-    echo "  ✅ 成功: ${#successful_interfaces[@]} 个接口"
-    if [ ${#successful_interfaces[@]} -gt 0 ]; then
-        for interface in "${successful_interfaces[@]}"; do
-            echo "     • $interface"
-        done
-    fi
-    echo "  ❌ 失败: ${#failed_interfaces[@]} 个接口"
-    if [ ${#failed_interfaces[@]} -gt 0 ]; then
-        for interface in "${failed_interfaces[@]}"; do
-            echo "     • $interface"
-        done
-    fi
-    echo
-
-    log_info "📋 [完成] 所有活动接口的MAC地址修改尝试完成"
-
-    if $overall_success; then
-        return 0 # 所有尝试都成功
-    else
-        # 🔧 MAC地址修改失败时自动切换到JS内核修改
-        echo
-        log_warn "⚠️  [警告] MAC地址修改失败或部分失败"
-        log_info "🔧 [智能切换] 自动切换到JS内核修改方案..."
-        log_info "💡 [说明] JS内核修改直接修改Cursor设备检测逻辑，绕过效果更好"
-
-        if modify_cursor_js_files; then
-            log_info "✅ [成功] JS内核修改完成，已实现设备识别绕过"
-            log_info "💡 [结果] 虽然MAC地址修改失败，但JS内核修改提供了更直接的解决方案"
-            return 0
-        else
-            log_error "❌ [失败] JS内核修改也失败了"
-            log_error "💥 [严重] 所有设备识别绕过方案都失败了"
-            return 1
-        fi
     fi
 }
 
@@ -2752,17 +2618,7 @@ main() {
             log_info "💡 [建议] 请尝试'重置环境+修改机器码'选项"
         fi
 
-        # 🔧 智能设备识别绕过（MAC地址修改或JS内核修改）
-        echo
-        log_info "🔧 [设备识别] 开始智能设备识别绕过..."
-        log_info "💡 [说明] 将根据系统环境自动选择最佳方案（MAC地址修改或JS内核修改）"
 
-        if change_system_mac_address; then
-            log_info "✅ [成功] 设备识别绕过完成（使用MAC地址修改）"
-        else
-            log_warn "⚠️  [警告] 设备识别绕过失败或部分失败"
-            log_info "💡 [提示] 但可能已通过JS内核修改实现了绕过效果"
-        fi
 
         # 🚫 禁用自动更新（仅修改模式也需要）
         echo
@@ -2818,12 +2674,6 @@ main() {
         log_info "🔧 [设备识别] 开始智能设备识别绕过..."
         log_info "💡 [说明] 将根据系统环境自动选择最佳方案（MAC地址修改或JS内核修改）"
 
-        if change_system_mac_address; then
-            log_info "✅ [成功] 设备识别绕过完成（使用MAC地址修改）"
-        else
-            log_warn "⚠️  [警告] 设备识别绕过失败或部分失败"
-            log_info "💡 [提示] 但可能已通过JS内核修改实现了绕过效果"
-        fi
 
         # 🔧 关键修复：修复应用签名问题（防止"应用已损坏"错误）
         echo
@@ -2862,7 +2712,6 @@ main() {
     echo -e "${BLUE}   🎯 修改结果总结     ${NC}"
     echo -e "${GREEN}================================${NC}"
     echo -e "${GREEN}✅ JSON配置文件修改: 完成${NC}"
-    echo -e "${GREEN}✅ MAC地址修改: 完成${NC}"
     echo -e "${GREEN}✅ 自动更新禁用: 完成${NC}"
     echo -e "${GREEN}================================${NC}"
     echo
@@ -2877,7 +2726,6 @@ main() {
     echo
     log_info "💡 [重要提示] 完整的Cursor破解流程已执行："
     echo -e "${BLUE}  ✅ 机器码配置文件修改${NC}"
-    echo -e "${BLUE}  ✅ 系统MAC地址修改${NC}"
     echo -e "${BLUE}  ✅ 自动更新功能禁用${NC}"
     echo -e "${BLUE}  ✅ 权限修复和验证${NC}"
     echo
